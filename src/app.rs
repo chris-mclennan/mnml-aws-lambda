@@ -237,9 +237,16 @@ impl App {
     /// focused function's `/aws/lambda/<name>` log group. Spawns the
     /// sibling as a detached process in the standalone path; under
     /// blit-host the parent (mnml/tmnl) handles tab spawning, but
-    /// v0.1 just spawns standalone — the family handoff message
-    /// goes through `Message::OpenPane` and that wiring is a v0.2
-    /// follow-up.
+    /// v0.2 wires the cross-sibling handoff properly: spawns
+    /// `mnml-aws-cloudwatch-logs --log-group /aws/lambda/<fn>
+    /// --log-group-name <fn> [--region <r>]`. The sibling (v0.2+)
+    /// recognises these CLI flags and builds a one-off single-tab
+    /// session — bypassing the user's configured tabs entirely so
+    /// the rest of their cloudwatch-logs setup stays intact.
+    ///
+    /// Falls back to a bare `mnml-aws-cloudwatch-logs` spawn if the
+    /// sibling isn't installed; the status string flags the user to
+    /// install it.
     pub fn tail_logs(&mut self) {
         let Some(fun) = self.focused_function() else {
             self.status = "no function under cursor".into();
@@ -247,25 +254,20 @@ impl App {
         };
         let log_group = crate::lambda::log_group_for(&fun.function_name);
         let region = self.active().spec.region.clone();
+        let fn_name = fun.function_name.clone();
 
-        // Write a one-shot config snippet into a temp file the
-        // sibling will pick up — but the sibling's design today is
-        // to read a static config at `~/.config/mnml-aws-cloudwatch-logs.toml`.
-        // For v0.1, just launch the sibling and let the user switch
-        // tabs to the right log group. (v0.2 will pass --log-group
-        // through a sibling CLI flag.)
-        let _ = log_group; // suppressed for v0.1 — used in v0.2 wiring
-        let _ = region;
-
-        match Command::new("mnml-aws-cloudwatch-logs").spawn() {
+        let mut cmd = Command::new("mnml-aws-cloudwatch-logs");
+        cmd.args(["--log-group", &log_group, "--log-group-name", &fn_name]);
+        if let Some(r) = &region {
+            cmd.args(["--region", r]);
+        }
+        match cmd.spawn() {
             Ok(_) => {
-                self.status = format!(
-                    "launched cloudwatch-logs (note: v0.1 doesn't auto-scope to /aws/lambda/{} — switch tabs in the launched view)",
-                    fun.function_name
-                );
+                self.status = format!("tailing /aws/lambda/{fn_name}");
             }
             Err(e) => {
-                self.status = format!("spawn failed (install mnml-aws-cloudwatch-logs?): {e}");
+                self.status =
+                    format!("spawn failed (install mnml-aws-cloudwatch-logs ≥ v0.2.0): {e}");
             }
         }
     }

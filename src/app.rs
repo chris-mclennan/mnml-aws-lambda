@@ -271,6 +271,53 @@ impl App {
             }
         }
     }
+
+    /// `L` — DLQ jump. When the focused function has a
+    /// `DeadLetterConfig.TargetArn`, parse the ARN's service segment
+    /// and spawn the matching sibling (sqs or sns). Mirrors the SNS
+    /// subscription / EventBridge target handoff pattern.
+    ///
+    /// Today: spawns the sibling with no auto-scope to the specific
+    /// queue / topic — the user still has to navigate to it.
+    /// v0.x will pass a `--scope-arn` (or similar) so the sibling
+    /// auto-focuses the right row.
+    pub fn handoff_dlq(&mut self) {
+        let Some(fun) = self.focused_function() else {
+            self.status = "no function under cursor".into();
+            return;
+        };
+        let Some(dlc) = &fun.dead_letter_config else {
+            self.status = "no DLQ configured on this function".into();
+            return;
+        };
+        let Some(arn) = dlc.target_arn.as_deref() else {
+            self.status = "no DLQ configured on this function".into();
+            return;
+        };
+        // ARN shape: `arn:aws:<service>:<region>:<account>:<resource>`.
+        let segs: Vec<&str> = arn.split(':').collect();
+        let service = segs.get(2).copied().unwrap_or("");
+        let resource = segs.last().copied().unwrap_or("");
+
+        let binary = match service {
+            "sqs" => "mnml-aws-sqs",
+            "sns" => "mnml-aws-sns",
+            other => {
+                self.status = format!("no sibling for `{other}` DLQ — supported: sqs, sns");
+                return;
+            }
+        };
+
+        match Command::new(binary).spawn() {
+            Ok(_) => {
+                self.status =
+                    format!("launched {binary} — navigate to {resource} (auto-scope is v0.x)");
+            }
+            Err(e) => {
+                self.status = format!("spawn {binary} failed (install it?): {e}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

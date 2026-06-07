@@ -35,6 +35,51 @@ pub struct Function {
     pub package_type: Option<String>,
     #[serde(rename = "Architectures", default)]
     pub architectures: Vec<String>,
+    #[serde(rename = "Environment", default)]
+    pub environment: Option<EnvironmentResponse>,
+    #[serde(rename = "ReservedConcurrentExecutions", default)]
+    pub reserved_concurrent_executions: Option<u32>,
+    #[serde(rename = "TracingConfig", default)]
+    pub tracing_config: Option<TracingConfig>,
+    #[serde(rename = "DeadLetterConfig", default)]
+    pub dead_letter_config: Option<DeadLetterConfig>,
+}
+
+/// The `Environment` block of `get-function-configuration` / `list-functions`.
+/// We don't render the actual values (they're typically secrets); just the
+/// count + any error from the resolver.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentResponse {
+    #[serde(rename = "Variables", default)]
+    pub variables: std::collections::HashMap<String, String>,
+    #[serde(rename = "Error", default)]
+    pub error: Option<EnvironmentError>,
+}
+
+impl EnvironmentResponse {
+    pub fn var_count(&self) -> usize {
+        self.variables.len()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentError {
+    #[serde(rename = "ErrorCode", default)]
+    pub error_code: Option<String>,
+    #[serde(rename = "Message", default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TracingConfig {
+    #[serde(rename = "Mode", default)]
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetterConfig {
+    #[serde(rename = "TargetArn", default)]
+    pub target_arn: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +236,55 @@ mod tests {
         assert_eq!(fmt_bytes(500), "500 B");
         assert_eq!(fmt_bytes(2048), "2.0 KB");
         assert_eq!(fmt_bytes(3_145_728), "3.0 MB");
+    }
+
+    #[test]
+    fn parses_environment_variables() {
+        let json = r#"
+        {
+            "Functions": [
+                {
+                    "FunctionName": "api-handler",
+                    "FunctionArn": "arn:aws:lambda:us-east-1:1:function:api-handler",
+                    "Role": "arn:aws:iam::1:role/r",
+                    "Environment": {
+                        "Variables": {
+                            "DATABASE_URL": "postgres://…",
+                            "REDIS_URL": "redis://…",
+                            "LOG_LEVEL": "info"
+                        }
+                    },
+                    "ReservedConcurrentExecutions": 50,
+                    "TracingConfig": {"Mode": "Active"},
+                    "DeadLetterConfig": {"TargetArn": "arn:aws:sqs:us-east-1:1:dlq"}
+                }
+            ]
+        }"#;
+        let resp: ListFunctionsResponse = serde_json::from_str(json).unwrap();
+        let fn_ = &resp.functions[0];
+        let env = fn_.environment.as_ref().expect("environment present");
+        assert_eq!(env.var_count(), 3);
+        assert_eq!(fn_.reserved_concurrent_executions, Some(50));
+        let tracing = fn_.tracing_config.as_ref().expect("tracing present");
+        assert_eq!(tracing.mode.as_deref(), Some("Active"));
+        let dlc = fn_.dead_letter_config.as_ref().expect("dlc present");
+        assert!(dlc.target_arn.as_deref().unwrap_or("").ends_with(":dlq"));
+    }
+
+    #[test]
+    fn environment_with_resolver_error_parses() {
+        let json = r#"
+        {
+            "Variables": {},
+            "Error": {
+                "ErrorCode": "AccessDeniedException",
+                "Message": "The role does not have permission to decrypt the env"
+            }
+        }"#;
+        let env: EnvironmentResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(env.var_count(), 0);
+        let err = env.error.as_ref().expect("error present");
+        assert_eq!(err.error_code.as_deref(), Some("AccessDeniedException"));
     }
 
     #[test]

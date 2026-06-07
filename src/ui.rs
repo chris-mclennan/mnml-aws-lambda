@@ -225,6 +225,46 @@ fn draw_detail(f: &mut Frame, area: Rect, fun: Option<&Function>) {
     if !fun.role.is_empty() {
         lines.push(kv("Role", short_arn(&fun.role)));
     }
+    // Env vars count (we don't render the values — typically secrets).
+    if let Some(env) = &fun.environment {
+        let n = env.var_count();
+        if n > 0 {
+            lines.push(kv("Env vars", format!("{n}")));
+        }
+        if let Some(err) = &env.error
+            && err.error_code.is_some()
+        {
+            lines.push(kv(
+                "Env error",
+                err.message
+                    .clone()
+                    .or_else(|| err.error_code.clone())
+                    .unwrap_or_else(|| "unknown".into()),
+            ));
+        }
+    }
+    // Reserved concurrent executions — capped throttle. Sets an
+    // explicit pool size; `None` means unreserved (shared account
+    // pool); `Some(0)` means "throttle everything" (a kill switch).
+    if let Some(r) = fun.reserved_concurrent_executions {
+        let label = if r == 0 {
+            "0 (throttled)".to_string()
+        } else {
+            r.to_string()
+        };
+        lines.push(kv("Reserved concur", label));
+    }
+    if let Some(tracing) = &fun.tracing_config
+        && let Some(mode) = &tracing.mode
+    {
+        lines.push(kv("Tracing", mode.clone()));
+    }
+    if let Some(dlc) = &fun.dead_letter_config
+        && let Some(target) = &dlc.target_arn
+        && !target.is_empty()
+    {
+        lines.push(kv("DLQ", short_arn(target)));
+    }
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         " ARN ",
